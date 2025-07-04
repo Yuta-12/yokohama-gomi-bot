@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>横浜市ごみ分別チャットボット</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    body { font-family: 'Inter', 'Noto Sans JP', sans-serif; }
+    #chat-container::-webkit-scrollbar { width: 8px; }
+    #chat-container::-webkit-scrollbar-track { background: #f1f1f1; }
+    #chat-container::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+    #chat-container::-webkit-scrollbar-thumb:hover { background: #555; }
+    .prose p { margin-top: 0.5em; margin-bottom: 0.5em; }
+    .prose ul { margin-top: 0.5em; margin-bottom: 0.5em; padding-left: 1.5em; }
+    .prose li { margin-top: 0.25em; margin-bottom: 0.25em; }
+    .prose strong { font-weight: 600; }
+    .prose code { background-color: #f3f4f6; padding: 0.2em 0.4em; margin: 0; font-size: 85%; border-radius: 3px; }
+    .prose pre { background-color: #f3f4f6; padding: 1em; border-radius: 6px; overflow-x: auto; }
+  </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4">
+  <div class="w-full max-w-2xl mx-auto bg-white rounded-2xl shadow-xl flex flex-col h-[90vh]">
+    <!-- Header -->
+    <header class="bg-blue-600 text-white p-4 rounded-t-2xl flex items-center justify-between shadow-md">
+      <div class="flex items-center space-x-3">
+        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-recycle"><path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-2.926L5.53 12.2"/><path d="m14 16-3 3 3 3"/><path d="M10.163 7.118a1.83 1.83 0 0 1 2.409-.592l4.428 2.46a1.83 1.83 0 0 1 .592 2.409L15.3 15.2"/><path d="M18 13.867V19a2 2 0 0 1-2 2h-1.185"/><path d="M4 12V8a2 2 0 0 1 2-2h1.185a1.83 1.83 0 0 1 1.57 2.926L6.47 12.8"/></svg>
+        <h1 class="text-xl font-bold">横浜市ごみ分別チャット</h1>
+      </div>
+    </header>
+
+    <!-- Chat Container -->
+    <div id="chat-container" class="flex-1 p-6 overflow-y-auto"></div>
+
+    <!-- Input Area -->
+    <div class="p-4 border-t border-gray-200 bg-white rounded-b-2xl">
+      <div class="flex items-center space-x-3">
+        <input type="text" id="user-input" class="flex-1 p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="例: 「乾電池」や「スプレー缶」の捨て方は？">
+        <button id="send-button" class="bg-blue-600 text-white p-3 rounded-xl hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-send-horizontal"><path d="m3 3 3 9-3 9 19-9Z"/><path d="M6 12h16"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const chatContainer = document.getElementById('chat-container');
+    const userInput = document.getElementById('user-input');
+    const sendButton = document.getElementById('send-button');
+
+    const SYSTEM_PROMPT = `あなたは「横浜市ごみ分別案内チャットボット」です。横浜市の公式情報に基づいて、ごみの分別方法や収集日について、親切かつ正確に回答してください。ユーザーからの質問が曖昧な場合は、具体的な品目や地域を聞き返してください。横浜市のゴミ分別ルール以外の質問には答えないでください。回答は常に日本語で、箇条書きや太字などを使って分かりやすくマークダウン形式で整形してください。`;
+
+    sendButton.addEventListener('click', handleSendMessage);
+    userInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) handleSendMessage();
+    });
+
+    function initialize() {
+      addMessage('bot', 'こんにちは！横浜市のゴミの分別について、どんなことでも聞いてくださいね。');
+    }
+
+    async function handleSendMessage() {
+      const message = userInput.value.trim();
+      if (!message) return;
+
+      addMessage('user', message);
+      userInput.value = '';
+      setLoading(true);
+
+      try {
+        const botResponse = await getGeminiResponse(message);
+        addMessage('bot', botResponse);
+      } catch (error) {
+        console.error('Error:', error);
+        addMessage('system', `エラーが発生しました: ${error.message}。しばらくしてからもう一度お試しください。`);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function getGeminiResponse(userMessage) {
+      const payload = {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: SYSTEM_PROMPT + "\n\n" + userMessage }]
+          }
+        ]
+      };
+
+      const response = await fetch('/.netlify/functions/gomi-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || `ステータス: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+        return result.candidates[0].content.parts[0].text;
+      } else {
+        return "申し訳ありません、応答を生成できませんでした。";
+      }
+    }
+
+    function addMessage(role, text) {
+      const messageWrapper = document.createElement('div');
+      messageWrapper.className = `flex mb-4 w-full ${role === 'user' ? 'justify-end' : 'justify-start'}`;
+      const messageBubble = document.createElement('div');
+
+      if (role === 'system') {
+        messageBubble.className = 'w-full text-center text-sm text-gray-500 p-2';
+        messageBubble.textContent = text;
+      } else {
+        messageBubble.className = 'rounded-2xl p-4 max-w-lg lg:max-w-xl xl:max-w-2xl';
+        const contentContainer = document.createElement('div');
+
+        if (role === 'user') {
+          messageBubble.className += ' bg-blue-500 text-white';
+          contentContainer.textContent = text;
+        } else {
+          messageBubble.className += ' bg-gray-200 text-gray-800';
+          contentContainer.className = 'prose';
+          contentContainer.innerHTML = marked.parse(text);
+        }
+        messageBubble.appendChild(contentContainer);
+      }
+
+      messageWrapper.appendChild(messageBubble);
+      chatContainer.appendChild(messageWrapper);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function setLoading(isLoading) {
+      userInput.disabled = isLoading;
+      sendButton.disabled = isLoading;
+      sendButton.innerHTML = isLoading
+        ? `<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`
+        : `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-send-horizontal"><path d="m3 3 3 9-3 9 19-9Z"/><path d="M6 12h16"/></svg>`;
+    }
+
+    initialize();
+  </script>
+</body>
+</html>
